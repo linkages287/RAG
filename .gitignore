@@ -1,0 +1,12 @@
+*.pdf
+out.json
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+venv/
+env/
+.env/
+.idea/
+.vscode/
