@@ -53,6 +53,54 @@
       </div>
     </header>
 
+    <section class="chunk">
+      <h3>Search</h3>
+      <form method="get" action="/">
+        <label>
+          Query:
+          <input type="text" name="q" value="{{ query }}" style="width: 60%" />
+        </label>
+        <label>
+          Top K:
+          <input type="number" name="k" value="{{ top_k }}" min="1" max="50" />
+        </label>
+        <label>
+          Use LLM:
+          <input type="checkbox" name="use_llm" {% if use_llm %}checked{% endif %} />
+        </label>
+        <input type="hidden" name="path" value="{{ json_path }}" />
+        <input type="hidden" name="vectors" value="{{ vectors_path }}" />
+        <button type="submit">Search</button>
+      </form>
+      <div class="meta">
+        Vectors: {{ vectors_path }}
+      </div>
+    </section>
+
+    {% if llm_answer %}
+    <section class="chunk">
+      <h3>LLM Answer</h3>
+      <pre>{{ llm_answer }}</pre>
+    </section>
+    {% endif %}
+
+    {% if search_results %}
+    <section>
+      <h2>Search Results</h2>
+      {% for result in search_results %}
+      <div class="chunk">
+        <h3>
+          #{{ result.rank }}
+          <span class="badge">score: {{ "%.4f"|format(result.score) }}</span>
+          <span class="badge">chunk_id: {{ result.chunk.chunk_id }}</span>
+          <span class="badge">pages: {{ result.chunk.page_start }}-{{ result.chunk.page_end }}</span>
+        </h3>
+        <pre>{{ result.chunk.text }}</pre>
+      </div>
+      {% endfor %}
+    </section>
+    {% endif %}
+
     {% for chunk in chunks %}
     <div class="chunk">
       <h3>
