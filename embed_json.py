@@ -24,8 +24,14 @@ def load_texts(json_path: Path) -> List[str]:
     return [chunk.get("text", "") for chunk in chunks]
 
 
+def load_chunks(json_path: Path) -> List[dict]:
+    with json_path.open("r", encoding="utf-8") as f:
+        payload = json.load(f)
+    return payload.get("chunks", [])
+
+
 def embed_texts(
-    texts: List[str],
+    chunks: List[dict],
     model_name: str,
     batch_size: int,
     cache_dir: Path | None,
@@ -35,9 +41,18 @@ def embed_texts(
     model.eval()
 
     embeddings: List[np.ndarray] = []
+    total = len(chunks)
     with torch.no_grad():
-        for i in range(0, len(texts), batch_size):
-            batch = texts[i : i + batch_size]
+        for i in range(0, total, batch_size):
+            batch_chunks = chunks[i : i + batch_size]
+            batch = [chunk.get("text", "") for chunk in batch_chunks]
+            pdf_names = [chunk.get("source_pdf") for chunk in batch_chunks if chunk.get("source_pdf")]
+            if pdf_names:
+                current_pdf = pdf_names[-1]
+            else:
+                current_pdf = "unknown"
+            percent = int(((i + len(batch)) / max(total, 1)) * 100)
+            print(f"[Vectorizing] {current_pdf} ({percent}%)")
             inputs = tokenizer(
                 batch,
                 padding=True,
@@ -82,14 +97,14 @@ def main() -> None:
 
     json_path = Path(args.input_json)
     out_path = Path(args.output_vectors)
-    texts = load_texts(json_path)
+    chunks = load_chunks(json_path)
     cache_dir = Path(args.cache_dir) if args.cache_dir else None
     local_model_dir = Path("/home/linkages/cursor/pdftext/models/mxbai-embed-large-v1")
     model_source = args.model
     if args.model == "mxbai-embed-large-v1" and local_model_dir.exists():
         model_source = str(local_model_dir)
     vectors = embed_texts(
-        texts,
+        chunks,
         model_name=model_source,
         batch_size=args.batch_size,
         cache_dir=cache_dir,

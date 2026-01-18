@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import json
+import re
 from pathlib import Path
 
 import numpy as np
@@ -51,6 +52,15 @@ def call_ollama(prompt: str, model: str, base_url: str) -> str:
     return response.get("response", "")
 
 
+def extract_country(source_pdf: str | None) -> str:
+    if not source_pdf:
+        return "unknown"
+    match = re.search(r"NU_JWC_(?:ETI_)?([A-Z]+)", source_pdf.upper())
+    if match:
+        return match.group(1)
+    return Path(source_pdf).stem
+
+
 # Build the Flask app and wire up the RAG + LLM search flow.
 def create_app(
     default_json: Path, default_vectors: Path, model_path: str, ollama_model: str
@@ -59,11 +69,12 @@ def create_app(
 
     @app.route("/", methods=["GET"])
     def index():
+        max_chunks = 50 ; #maximum number of chunks to return to LLM
         json_path = request.args.get("path") or str(default_json)
         vectors_path = request.args.get("vectors") or str(default_vectors)
         query = request.args.get("q", "").strip()
         top_k = int(request.args.get("k", "5"))
-        use_llm = request.args.get("use_llm", "on") == "on"
+        use_llm = request.args.get("use_llm", "on") == "on" #use the LLM flags 
         file_path = Path(json_path)
         if not file_path.exists() or not file_path.is_file():
             abort(404, description=f"JSON file not found: {file_path}")
@@ -73,6 +84,7 @@ def create_app(
 
         chunks = payload.get("chunks", [])
         search_results = []
+        all_results = []
         llm_answer = ""
         if query:
             vectors_file = Path(vectors_path)
@@ -83,7 +95,8 @@ def create_app(
                 abort(400, description="Vector count does not match chunk count.")
             query_vec = embed_query(query, model_path)
             scores = cosine_sim(vectors, query_vec)
-            top_idx = np.argsort(scores)[::-1][:top_k]
+            sorted_idx = np.argsort(scores)[::-1]
+            top_idx = sorted_idx[:top_k]
             for rank, idx in enumerate(top_idx, start=1):
                 chunk = chunks[int(idx)]
                 search_results.append(
@@ -91,17 +104,34 @@ def create_app(
                         "rank": rank,
                         "score": float(scores[idx]),
                         "chunk": chunk,
+                        "country": extract_country(chunk.get("source_pdf")),
+                    }
+                )
+            all_sorted = np.argsort(scores)[::-1]
+            for idx in all_sorted:
+                chunk = chunks[int(idx)]
+                all_results.append(
+                    {
+                        "score": float(scores[idx]),
+                        "chunk": chunk,
+                        "country": extract_country(chunk.get("source_pdf")),
+                        "source_pdf": chunk.get("source_pdf", "unknown"),
                     }
                 )
             if use_llm:
+                best_score = float(scores[sorted_idx[0]])
+                threshold = best_score * 0.90 # set the threshold to 90% of the best score
+                eligible_idx = [i for i in sorted_idx if float(scores[i]) >= threshold]
+                context_count = min(6, len(eligible_idx)) #pick max 6 chunks
+                context_idx = eligible_idx[:context_count]
                 top_context = "\n\n".join(
-                    f"[Chunk {r['chunk']['chunk_id']}] {r['chunk']['text']}"
-                    for r in search_results[:5]
+                    f"[Source {extract_country(chunks[int(i)].get('source_pdf'))}] "
+                    f"{chunks[int(i)]['text']}"
+                    for i in context_idx
                 )
                 prompt = (
-                    "Answer the user question using the context below as the primary "
-                    "source of truth. You may use your general knowledge to add useful "
-                    "background or clarification, but do not contradict the context. "
+                    "You are a NATO analyst."
+                    "Answer the user question analizing only the context below. "
                     "If the context is insufficient, say so explicitly.\n\n"
                     f"User question: {query}\n\n"
                     f"Context:\n{top_context}\n"
@@ -127,6 +157,7 @@ def create_app(
             query=query,
             top_k=top_k,
             search_results=search_results,
+            all_results=all_results,
             llm_answer=llm_answer,
             use_llm=use_llm,
         )

@@ -1,151 +1,92 @@
-# Project Usage Report
+# Tooling Report (Flow)
 
-## Overview
-This report summarizes how to use the Python scripts in this workspace and what
-each major function does. The focus is on the end-to-end flow:
+This report describes the tools in this workspace and how to use them in an
+end‑to‑end flow: PDFs → cleaned chunks → embeddings → search/LLM.
 
-1) Extract and clean PDF text, then chunk to JSON.
-2) Embed chunks into vectors (saved as `.npz`).
-3) Search vectors from CLI or from the Flask web UI.
-4) Visualize chunk content and query results in the web UI.
+## 1) Chunk PDFs into a collective JSON
+**Tool:** `pdf_to_text_chunker.py`  
+**What it does:** Extracts text from one or more PDFs, cleans it, chunks into
+overlapping token windows, and appends into a single JSON file.
 
-## `pdf_to_text_chunker.py`
-
-### Usage
-Extract text from a PDF, clean it, chunk into token windows (default 300 tokens
-with 15% overlap), and save JSON:
-
+**Run:**
 ```
-python3 pdf_to_text_chunker.py /path/to/input.pdf /path/to/out.json
+python3 pdf_to_text_chunker.py /path/to/combined.json /path/to/a.pdf /path/to/b.pdf
 ```
 
-Optional flags:
+You can also pass a directory to process all `*.pdf` files inside:
 ```
---max-tokens 300
-```
-
-### Key functions
-- `iter_pdf_pages_text(pdf_path)`  
-  Reads each PDF page with `PyPDF2` and yields `(page_index, page_text)`.
-
-- `tokenize(text)`  
-  Tokenizes by whitespace for deterministic, dependency-free counting.
-
-- `is_page_number_line(line)`  
-  Heuristic to detect page numbers (arabic or roman numerals) to remove.
-
-- `extract_header_footer_candidates(pages)`  
-  Builds sets of repeated first/last lines across pages to remove as
-  headers/footers.
-
-- `clean_page_text(text, headers, footers)`  
-  Cleans a page by removing headers/footers, merging hyphenated words across
-  line breaks, and normalizing whitespace.
-
-- `chunk_tokens(tokens_with_pages, max_tokens, overlap_ratio)`  
-  Chunks token streams into overlapping windows and tracks page ranges.
-
-- `build_chunks_from_pdf(pdf_path, max_tokens)`  
-  Orchestrates extraction, cleaning, tokenization, chunking, and prints cleaned
-  text to console during processing.
-
-## `embed_json.py`
-
-### Usage
-Embed the chunk JSON using `mxbai-embed-large-v1` and save vectors to `.npz`:
-
-```
-python3 embed_json.py /path/to/out.json /path/to/out_vectors.npz
+python3 pdf_to_text_chunker.py /path/to/combined.json /path/to/pdf_dir
 ```
 
-Optional flags:
+## 2) Embed the JSON into vectors
+**Tool:** `embed_json.py`  
+**What it does:** Embeds each chunk using `mxbai-embed-large-v1` and saves a
+compressed `.npz` file with vectors.
+
+**Run:**
 ```
---model mxbai-embed-large-v1
---batch-size 8
---cache-dir /path/to/cache
-```
-
-### Key functions
-- `mean_pooling(last_hidden_state, attention_mask)`  
-  Averages token embeddings using the attention mask.
-
-- `load_texts(json_path)`  
-  Loads chunk text from the JSON file.
-
-- `embed_texts(texts, model_name, batch_size, cache_dir)`  
-  Runs the transformer model and returns a NumPy matrix of embeddings.
-
-### Output format
-Vectors are saved as compressed NumPy archive:
-```
-out_vectors.npz
-  - vectors: float32 array [num_chunks, dim]
-  - metadata: JSON string with model and source info
+python3 embed_json.py /path/to/combined.json /path/to/vectors.npz
 ```
 
-## `search_vectors.py`
+## 3) Search vectors from CLI
+**Tool:** `search_vectors.py`  
+**What it does:** Embeds a query locally and returns the most similar chunks.
 
-### Usage
-Embed a query locally and return the top matching chunks:
-
+**Run:**
 ```
-python3 search_vectors.py /path/to/out_vectors.npz /path/to/out.json "your query" --top-k 5
-```
-
-Optional flags:
-```
---model-path /home/linkages/cursor/pdftext/models/mxbai-embed-large-v1
+python3 search_vectors.py /path/to/vectors.npz /path/to/combined.json "your query" --top-k 5
 ```
 
-### Key functions
-- `embed_query(query, model_path)`  
-  Embeds the query using the local model.
+## 4) Use the Flask UI (search + RAG)
+**Tool:** `app.py`  
+**What it does:** Web UI to search chunks and optionally generate a RAG answer
+with the local Ollama model.
 
-- `cosine_sim(a, b)`  
-  Cosine similarity between a matrix of vectors and a single query vector.
-
-- `load_vectors(npz_path)` / `load_chunks(json_path)`  
-  Loads vectors and chunks.
-
-- `top_k(vectors, query_vec, k)`  
-  Returns the top K most similar chunk indexes and scores.
-
-## `app.py` + `templates/index.html`
-
-### Usage
-Run the Flask UI to view chunks and run searches:
-
+**Run:**
 ```
-python3 app.py --json /path/to/out.json --vectors /path/to/out_vectors.npz
+python3 app.py --json /path/to/combined.json --vectors /path/to/vectors.npz --ollama-model llama3.2
 ```
 
-Open: `http://127.0.0.1:5000/`
+Then open: `http://127.0.0.1:5000/`
 
-### Key functions
-- `mean_pooling(...)`, `embed_query(...)`, `cosine_sim(...)`  
-  Same embedding + similarity logic as CLI search.
+## 5) Use the Flask UI with vector tree (coarse‑to‑fine)
+**Tool:** `app_tree.py`  
+**What it does:** Web UI that uses the vector tree (document → section → chunk)
+for coarse‑to‑fine search, then optionally generates a RAG answer with the local
+Ollama model.
 
-- `create_app(default_json, default_vectors, model_path)`  
-  Sets up the Flask app. The `/` route loads JSON, optionally embeds a query,
-  and returns ranked results to the template.
+**Run:**
+```
+python3 app_tree.py --json /path/to/combined.json --vectors /path/to/vectors.npz --tree-json /path/to/tree.json --tree-vectors /path/to/tree_vectors.npz --ollama-model llama3.2
+```
 
-### Template behavior
-`templates/index.html` renders:
-- A search form (`q`, `k`) for query input.
-- The top-ranked search results (with score and chunk metadata).
-- The full list of chunks for browsing.
+Open: `http://127.0.0.1:5001/`
 
-## Recommended Workflow
-1) Chunk the PDF:
+## 6) Build a vector tree (optional)
+**Tool:** `build_vector_tree.py`  
+**What it does:** Creates a hierarchy: chunk → section → document using mean
+pooled vectors.
+
+**Run:**
 ```
-python3 pdf_to_text_chunker.py input.pdf out.json
+python3 build_vector_tree.py /path/to/vectors.npz /path/to/combined.json /path/to/tree.json --section-size 5 --output-npz /path/to/tree_vectors.npz
 ```
-2) Embed the chunks:
+
+## 7) Visualize vectors in 3D (optional)
+**Tool:** `visualize_vectors_3d.py`  
+**What it does:** PCA projection of vectors with clustering‑based colors.
+
+**Run:**
 ```
-python3 embed_json.py out.json out_vectors.npz --cache-dir ./model_cache
+python3 visualize_vectors_3d.py /path/to/vectors.npz --clusters 8 --sample 2000
 ```
-3) Search via CLI or web:
+
+## 8) Zip a folder (optional utility)
+**Tool:** `folder_archive.py`  
+**What it does:** Compress or decompress folders to ZIP.
+
+**Run:**
 ```
-python3 search_vectors.py out_vectors.npz out.json "your query"
-python3 app.py --json out.json --vectors out_vectors.npz
+python3 folder_archive.py compress /path/to/folder /path/to/output.zip
+python3 folder_archive.py decompress /path/to/output.zip /path/to/output_folder
 ```

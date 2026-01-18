@@ -89,9 +89,28 @@
       <h2>Search Results</h2>
       {% for result in search_results %}
       <div class="chunk">
+      <h3>
+        #{{ result.rank }}
+        <span class="badge">score: {{ "%.4f"|format(result.score) }}</span>
+        <span class="badge">country: {{ result.country }}</span>
+        <span class="badge">chunk_id: {{ result.chunk.chunk_id }}</span>
+        <span class="badge">pages: {{ result.chunk.page_start }}-{{ result.chunk.page_end }}</span>
+      </h3>
+        <pre>{{ result.chunk.text }}</pre>
+      </div>
+      {% endfor %}
+    </section>
+    {% endif %}
+
+    {% if all_results %}
+    <section>
+      <h2>All Chunks (Scored)</h2>
+      {% for result in all_results %}
+      <div class="chunk">
         <h3>
-          #{{ result.rank }}
           <span class="badge">score: {{ "%.4f"|format(result.score) }}</span>
+          <span class="badge">country: {{ result.country }}</span>
+          <span class="badge">source: {{ result.source_pdf }}</span>
           <span class="badge">chunk_id: {{ result.chunk.chunk_id }}</span>
           <span class="badge">pages: {{ result.chunk.page_start }}-{{ result.chunk.page_end }}</span>
         </h3>
