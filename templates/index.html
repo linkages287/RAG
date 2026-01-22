@@ -75,6 +75,14 @@
       <div class="meta">
         Vectors: {{ vectors_path }}
       </div>
+      {% if query_type %}
+      <div class="meta" style="margin-top: 8px;">
+        <strong>Query Type:</strong> 
+        <span class="badge" style="background: {% if query_type == 'rag' %}#d4edda{% else %}#fff3cd{% endif %};">
+          {% if query_type == 'rag' %}RAG Context Required{% else %}General Knowledge{% endif %}
+        </span>
+      </div>
+      {% endif %}
     </section>
 
     {% if llm_answer %}

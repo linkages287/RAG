@@ -52,36 +52,6 @@ def call_ollama(prompt: str, model: str, base_url: str) -> str:
     return response.get("response", "")
 
 
-# Agent to determine if query needs RAG context or can use general knowledge.
-def classify_query_agent(query: str, ollama_model: str, base_url: str) -> str:
-    """
-    Classify whether a query requires RAG context or can be answered with general knowledge.
-    Returns: 'rag' if context needed, 'general' if general knowledge sufficient.
-    """
-    classification_prompt = (
-        "You are a query classification agent. Analyze the following question and determine "
-        "if it requires specific document context (like country profiles, military data, infrastructure details) "
-        "or can be answered with general knowledge.\n\n"
-        "Respond with ONLY one word: 'rag' if the question needs specific document context, "
-        "or 'general' if it can be answered with general knowledge.\n\n"
-        f"Question: {query}\n\n"
-        "Response:"
-    )
-    try:
-        response = call_ollama(classification_prompt, ollama_model, base_url)
-        result = response.strip().lower()
-        if "rag" in result or "context" in result or "document" in result:
-            return "rag"
-        elif "general" in result:
-            return "general"
-        else:
-            # Default to RAG if unclear
-            return "rag"
-    except Exception:
-        # Default to RAG on error
-        return "rag"
-
-
 def extract_country(source_pdf: str | None) -> str:
     if not source_pdf:
         return "unknown"
@@ -116,12 +86,7 @@ def create_app(
         search_results = []
         all_results = []
         llm_answer = ""
-        query_type = None
         if query:
-            # Classify query to determine if RAG context is needed
-            query_type = classify_query_agent(query, ollama_model, "http://localhost:11434")
-            print(f"\n[Query Classification] Type: {query_type}\n")
-            
             vectors_file = Path(vectors_path)
             if not vectors_file.exists() or not vectors_file.is_file():
                 abort(404, description=f"Vectors file not found: {vectors_file}")
@@ -154,39 +119,28 @@ def create_app(
                     }
                 )
             if use_llm:
-                if query_type == "general":
-                    # For general knowledge queries, answer without RAG context
-                    prompt = (
-                        "You are a NATO analyst. "
-                        "Answer the following question using your general knowledge. "
-                        "Provide a detailed and accurate response.\n\n"
-                        f"Question: {query}\n"
-                    )
-                    print("\n[General Knowledge Mode] Answering without RAG context\n")
-                else:
-                    # For RAG queries, use context from documents
-                    max_chunks = 8
-                    best_score = float(scores[sorted_idx[0]])
-                    threshold = best_score * 0.90 # set the threshold to 90% of the best score
-                    eligible_idx = [i for i in sorted_idx if float(scores[i]) >= threshold]
-                    context_count = min(max_chunks, len(eligible_idx)) #pick max 6 chunks
-                    context_idx = eligible_idx[:context_count]
-                    top_k = context_count
-                    top_context = "\n\n".join(
-                        f"[Source {extract_country(chunks[int(i)].get('source_pdf'))}] "
-                        f"{chunks[int(i)]['text']}"
-                        for i in context_idx
-                    )
-                    prompt = (
-                        "You are a NATO analyst."
-                        "Answer the user question analizing only the context below. "
-                        "If the context is insufficient, say so explicitly.\n\n"
-                        f"User question: {query}\n\n"
-                        f"Context:\n{top_context}\n"
-                    )
+                max_chunks = 8
+                best_score = float(scores[sorted_idx[0]])
+                threshold = best_score * 0.90 # set the threshold to 90% of the best score
+                eligible_idx = [i for i in sorted_idx if float(scores[i]) >= threshold]
+                context_count = min(max_chunks, len(eligible_idx)) #pick max 6 chunks
+                context_idx = eligible_idx[:context_count]
+                top_k = context_count
+                top_context = "\n\n".join(
+                    f"[Source {extract_country(chunks[int(i)].get('source_pdf'))}] "
+                    f"{chunks[int(i)]['text']}"
+                    for i in context_idx
+                )
+                prompt = (
+                    "You are a NATO analyst."
+                    "Answer the user question analizing only the context below. "
+                    "If the context is insufficient, say so explicitly.\n\n"
+                    f"User question: {query}\n\n"
+                    f"Context:\n{top_context}\n"
+                )
+                try:
                     print("\n--- Injected RAG Prompt ---\n")
                     print(prompt)
-                try:
                     llm_answer = call_ollama(
                         prompt=prompt,
                         model=ollama_model,
@@ -208,7 +162,6 @@ def create_app(
             all_results=all_results,
             llm_answer=llm_answer,
             use_llm=use_llm,
-            query_type=query_type,
         )
 
     return app

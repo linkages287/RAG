@@ -187,6 +187,7 @@ def create_app(
                 ]
                 context_count = min(10, len(eligible_idx))
                 context_idx = eligible_idx[:context_count]
+                top_k = context_count
                 top_context = "\n\n".join(
                     f"[Source {extract_country(chunks[candidate_chunk_indices[int(i)]].get('source_pdf'))}] "
                     f"{chunks[candidate_chunk_indices[int(i)]]['text']}"

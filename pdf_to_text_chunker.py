@@ -174,6 +174,93 @@ def merge_ocr_splits(text: str) -> str:
     return text
 
 
+# Regex patterns for coordinate detection (same as coords_finder.py)
+DECIMAL_PAIR_RE = re.compile(
+    r"(?P<lat>[+-]?\d{1,2}\.\d+)\s*[,;/]\s*(?P<lon>[+-]?\d{1,3}\.\d+)"
+)
+
+DMS_RE = re.compile(
+    r"(?P<deg>\d{1,3})\s*[°]\s*"
+    r"(?P<min>\d{1,2})\s*[′'\u2019]\s*"
+    r"(?P<sec>\d{1,2}(?:\.\d+)?)?\s*[″\"\u201d]?\s*"
+    r"(?P<hem>[NSEW])",
+    re.IGNORECASE,
+)
+
+
+def normalize_decimal_pair(lat: float, lon: float) -> tuple[float, float] | None:
+    """Validate and normalize lat/lon pair (same logic as coords_finder)."""
+    if -90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0:
+        return lat, lon
+    if -90.0 <= lon <= 90.0 and -180.0 <= lat <= 180.0:
+        return lon, lat
+    return None
+
+
+def truncate_decimal(num: float) -> str:
+    """Truncate a decimal number to 3 decimal places, removing trailing zeros."""
+    truncated = f"{num:.3f}"
+    if "." in truncated:
+        truncated = truncated.rstrip("0").rstrip(".")
+    return truncated
+
+
+# Truncate coordinate-like decimal numbers to 3 decimal places using coords_finder methodology.
+def truncate_coordinates(text: str) -> str:
+    """
+    Find and truncate coordinates using the same detection methodology as coords_finder.py.
+    Handles decimal pairs (e.g., "12.345678, -1.234567") and validates lat/lon ranges.
+    """
+    # Process decimal pairs
+    def truncate_decimal_pair(match: re.Match) -> str:
+        lat_str = match.group("lat")
+        lon_str = match.group("lon")
+        full_match = match.group(0)
+        try:
+            lat = float(lat_str)
+            lon = float(lon_str)
+            normalized = normalize_decimal_pair(lat, lon)
+            if normalized:
+                # Valid coordinate pair - truncate both
+                lat_trunc = truncate_decimal(normalized[0])
+                lon_trunc = truncate_decimal(normalized[1])
+                # Extract separator from original match (comma, semicolon, or slash)
+                sep_match = re.search(r"\s*([,;/])\s*", full_match)
+                sep = sep_match.group(1) if sep_match else ","
+                return f"{lat_trunc}{sep} {lon_trunc}"
+        except (ValueError, AttributeError):
+            pass
+        return full_match
+    
+    # Process DMS coordinates - truncate seconds to 3 decimal places if present
+    def truncate_dms_sec(match: re.Match) -> str:
+        sec_str = match.group("sec")
+        if sec_str and "." in sec_str:
+            try:
+                sec = float(sec_str)
+                sec_trunc = truncate_decimal(sec)
+                # Reconstruct the DMS string with truncated seconds, preserving original format
+                deg = match.group("deg")
+                min_val = match.group("min")
+                hem = match.group("hem")
+                # Preserve original quote style if present
+                original = match.group(0)
+                quote_char = "\"" if "\"" in original else "″" if "″" in original else "\""
+                sec_part = f"{sec_trunc}{quote_char}"
+                return f"{deg}°{min_val}'{sec_part}{hem}"
+            except (ValueError, AttributeError):
+                pass
+        return match.group(0)
+    
+    # Apply truncation to decimal pairs
+    text = DECIMAL_PAIR_RE.sub(truncate_decimal_pair, text)
+    
+    # Apply truncation to DMS seconds
+    text = DMS_RE.sub(truncate_dms_sec, text)
+    
+    return text
+
+
 # Clean page text for RAG: remove headers/footers and normalize spacing.
 def clean_page_text(text: str, headers: set, footers: set) -> str:
     lines = [line.strip() for line in text.splitlines()]
@@ -206,13 +293,14 @@ def clean_page_text(text: str, headers: set, footers: set) -> str:
     cleaned = re.sub(r"\b([A-Z]{2,})([a-z])", r"\1 \2", cleaned)
     cleaned = re.sub(r"\b([A-Z]{2,})\s+s\b", r"\1s", cleaned)
     cleaned = re.sub(r"([a-z])(?=etc\.)", r"\1 ", cleaned, flags=re.IGNORECASE)
+    cleaned = truncate_coordinates(cleaned)
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
     return cleaned
 
 
 # Chunk token stream with overlap and track page ranges.
 def chunk_tokens(
-    tokens_with_pages: List[Tuple[str, int]], max_tokens: int, overlap_ratio: float = 0.15
+    tokens_with_pages: List[Tuple[str, int]], max_tokens: int, overlap_ratio: float = 0.17
 ) -> List[dict]:
     chunks = []
     overlap_tokens = max(1, int(max_tokens * overlap_ratio))

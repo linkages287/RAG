@@ -1,0 +1,251 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>RAG Chatbot</title>
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+        margin: 0;
+        padding: 0;
+        background: #f5f5f5;
+        height: 100vh;
+        display: flex;
+        flex-direction: column;
+      }
+      header {
+        background: #2c3e50;
+        color: white;
+        padding: 16px 24px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+      }
+      header h1 {
+        margin: 0;
+        font-size: 20px;
+      }
+      .meta {
+        font-size: 12px;
+        opacity: 0.8;
+        margin-top: 4px;
+      }
+      .chat-container {
+        flex: 1;
+        overflow-y: auto;
+        padding: 24px;
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+      }
+      .message {
+        display: flex;
+        gap: 12px;
+        max-width: 80%;
+        animation: fadeIn 0.3s;
+      }
+      @keyframes fadeIn {
+        from { opacity: 0; transform: translateY(10px); }
+        to { opacity: 1; transform: translateY(0); }
+      }
+      .message.user {
+        align-self: flex-end;
+        flex-direction: row-reverse;
+      }
+      .message.assistant {
+        align-self: flex-start;
+      }
+      .message-avatar {
+        width: 36px;
+        height: 36px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: bold;
+        font-size: 14px;
+        flex-shrink: 0;
+      }
+      .message.user .message-avatar {
+        background: #3498db;
+        color: white;
+      }
+      .message.assistant .message-avatar {
+        background: #27ae60;
+        color: white;
+      }
+      .message-content {
+        background: white;
+        padding: 12px 16px;
+        border-radius: 12px;
+        box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+        word-wrap: break-word;
+      }
+      .message.user .message-content {
+        background: #3498db;
+        color: white;
+      }
+      .message.assistant .message-content {
+        background: white;
+        color: #333;
+      }
+      .message-meta {
+        font-size: 11px;
+        opacity: 0.7;
+        margin-top: 4px;
+        display: flex;
+        gap: 8px;
+        align-items: center;
+      }
+      .badge {
+        background: rgba(0,0,0,0.1);
+        border-radius: 4px;
+        padding: 2px 6px;
+        font-size: 10px;
+      }
+      .message.user .badge {
+        background: rgba(255,255,255,0.2);
+      }
+      .top-results {
+        margin-top: 12px;
+        padding-top: 12px;
+        border-top: 1px solid rgba(0,0,0,0.1);
+        font-size: 12px;
+      }
+      .top-results h4 {
+        margin: 0 0 8px 0;
+        font-size: 12px;
+        opacity: 0.8;
+      }
+      .result-item {
+        padding: 4px 0;
+        opacity: 0.8;
+      }
+      .input-container {
+        background: white;
+        padding: 16px 24px;
+        border-top: 1px solid #ddd;
+        box-shadow: 0 -2px 4px rgba(0,0,0,0.05);
+      }
+      .input-form {
+        display: flex;
+        gap: 12px;
+        max-width: 1200px;
+        margin: 0 auto;
+      }
+      .input-form input[type="text"] {
+        flex: 1;
+        padding: 12px 16px;
+        border: 1px solid #ddd;
+        border-radius: 24px;
+        font-size: 14px;
+        outline: none;
+      }
+      .input-form input[type="text"]:focus {
+        border-color: #3498db;
+      }
+      .input-form button {
+        padding: 12px 24px;
+        background: #3498db;
+        color: white;
+        border: none;
+        border-radius: 24px;
+        cursor: pointer;
+        font-size: 14px;
+        font-weight: 500;
+      }
+      .input-form button:hover {
+        background: #2980b9;
+      }
+      .input-form button.clear {
+        background: #e74c3c;
+      }
+      .input-form button.clear:hover {
+        background: #c0392b;
+      }
+      .empty-state {
+        text-align: center;
+        color: #999;
+        padding: 48px;
+        font-size: 14px;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>RAG Chatbot - NATO Analyst</h1>
+      <div class="meta">
+        JSON: {{ json_path }} | Chunks: {{ chunk_count }} | Max tokens: {{ max_tokens }}
+      </div>
+    </header>
+
+    <div class="chat-container" id="chatContainer">
+      {% if messages %}
+        {% for msg in messages %}
+          <div class="message {{ msg.role }}">
+            <div class="message-avatar">
+              {% if msg.role == "user" %}U{% else %}A{% endif %}
+            </div>
+            <div class="message-content">
+              <div>{{ msg.content }}</div>
+              <div class="message-meta">
+                <span class="badge">
+                  {% if msg.query_type == "rag" %}RAG Context{% else %}General Knowledge{% endif %}
+                </span>
+                {% if msg.role == "assistant" and msg.top_results %}
+                  <div class="top-results">
+                    <h4>Top Sources:</h4>
+                    {% for result in msg.top_results[:3] %}
+                      <div class="result-item">
+                        {{ result.country }} (score: {{ "%.3f"|format(result.score) }})
+                      </div>
+                    {% endfor %}
+                  </div>
+                {% endif %}
+              </div>
+            </div>
+          </div>
+        {% endfor %}
+      {% else %}
+        <div class="empty-state">
+          Start a conversation by asking a question about the documents.
+        </div>
+      {% endif %}
+    </div>
+
+    <div class="input-container">
+      <form method="POST" action="/" class="input-form" id="chatForm">
+        <input type="hidden" name="path" value="{{ json_path }}" />
+        <input type="hidden" name="vectors" value="{{ vectors_path }}" />
+        <input
+          type="text"
+          name="query"
+          placeholder="Ask a question about the documents..."
+          autocomplete="off"
+          autofocus
+          required
+        />
+        <button type="submit">Send</button>
+        <button type="submit" name="clear" value="clear" class="clear">Clear</button>
+      </form>
+    </div>
+
+    <script>
+      // Auto-scroll to bottom on new messages
+      const container = document.getElementById("chatContainer");
+      if (container) {
+        container.scrollTop = container.scrollHeight;
+      }
+      
+      // Focus input after form submission
+      document.getElementById("chatForm").addEventListener("submit", function() {
+        setTimeout(() => {
+          const input = this.querySelector('input[type="text"]');
+          if (input) input.focus();
+        }, 100);
+      });
+    </script>
+  </body>
+</html>
