@@ -45,10 +45,16 @@ def create_collection(client: weaviate.WeaviateClient, collection_name: str = "D
         return
     
     # Create collection with properties
+    # Try Vectors (plural) first, fallback to Vector (singular) for older API
+    try:
+        vector_config = Configure.Vectors.none()
+    except AttributeError:
+        vector_config = Configure.Vector.none()
+    
     client.collections.create(
         name=collection_name,
         description="Document chunks with embeddings for RAG system",
-        vector_config=Configure.Vector.none(),  # We provide our own vectors
+        vector_config=vector_config,  # We provide our own vectors
         properties=[
             Property(
                 name="chunk_id",

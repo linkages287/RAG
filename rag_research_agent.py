@@ -15,9 +15,11 @@ matplotlib.use('Agg')  # Non-interactive backend
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 import numpy as np
-import ollama
+import os
 import torch
 from transformers import AutoModel, AutoTokenizer
+
+from ollama_api import call_ollama_api
 
 
 # Mean-pool token embeddings with attention mask to get a sentence embedding.
@@ -120,8 +122,8 @@ def research_topic(
     
     # Generate comprehensive research report using LLM
     print("Generating research report...")
+    # Build context without country prefix for LLM injection
     context_text = "\n\n".join(
-        f"[Source: {item['country']}, Score: {item['score']:.3f}]\n"
         f"{item['chunk']['text']}"
         for item in context_chunks
     )
@@ -142,7 +144,8 @@ def research_topic(
         "Be thorough, accurate, and professional in your analysis."
     ).format(query=research_query, context=context_text)
     
-    report_content = call_ollama(research_prompt, ollama_model, "http://localhost:11434")
+    ollama_url = os.getenv("OLLAMA_URL", "http://0.0.0.0:11434")
+    report_content = call_ollama(research_prompt, ollama_model, ollama_url)
     
     return {
         "research_query": research_query,

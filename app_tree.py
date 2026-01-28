@@ -6,10 +6,12 @@ from pathlib import Path
 from typing import Dict, List, Tuple
 
 import numpy as np
-import ollama
+import os
 import torch
 from flask import Flask, abort, render_template, request
 from transformers import AutoModel, AutoTokenizer
+
+from ollama_api import call_ollama_api
 
 
 def mean_pooling(last_hidden_state: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
@@ -44,9 +46,8 @@ def cosine_sim(a: np.ndarray, b: np.ndarray) -> np.ndarray:
 
 
 def call_ollama(prompt: str, model: str, base_url: str) -> str:
-    client = ollama.Client(host=base_url)
-    response = client.generate(model=model, prompt=prompt, stream=False)
-    return response.get("response", "")
+    """Wrapper for call_ollama_api to maintain compatibility."""
+    return call_ollama_api(prompt=prompt, model=model, base_url=base_url, stream=False)
 
 
 def extract_country(source_pdf: str | None) -> str:
@@ -188,8 +189,8 @@ def create_app(
                 context_count = min(10, len(eligible_idx))
                 context_idx = eligible_idx[:context_count]
                 top_k = context_count
+                # Build context without country prefix for LLM injection
                 top_context = "\n\n".join(
-                    f"[Source {extract_country(chunks[candidate_chunk_indices[int(i)]].get('source_pdf'))}] "
                     f"{chunks[candidate_chunk_indices[int(i)]]['text']}"
                     for i in context_idx
                 )
@@ -204,10 +205,11 @@ def create_app(
                 try:
                     print("\n--- Injected RAG Prompt ---\n")
                     print(prompt)
+                    ollama_url = os.getenv("OLLAMA_URL", "http://0.0.0.0:11434")
                     llm_answer = call_ollama(
                         prompt=prompt,
                         model=ollama_model,
-                        base_url="http://localhost:11434",
+                        base_url=ollama_url,
                     )
                 except Exception as exc:
                     llm_answer = f"LLM error: {exc}"

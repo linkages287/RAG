@@ -6,10 +6,12 @@ from pathlib import Path
 from typing import Optional
 
 import numpy as np
-import ollama
+import os
 import torch
 from flask import Flask, abort, render_template, request, session
 from transformers import AutoModel, AutoTokenizer
+
+from ollama_api import call_ollama_api
 
 
 # Mean-pool token embeddings with attention mask to get a sentence embedding.
@@ -48,9 +50,8 @@ def cosine_sim(a: np.ndarray, b: np.ndarray) -> np.ndarray:
 
 # Call the local Ollama server with a prompt and return the response text.
 def call_ollama(prompt: str, model: str, base_url: str) -> str:
-    client = ollama.Client(host=base_url)
-    response = client.generate(model=model, prompt=prompt, stream=False)
-    return response.get("response", "")
+    """Wrapper for call_ollama_api to maintain compatibility."""
+    return call_ollama_api(prompt=prompt, model=model, base_url=base_url, stream=False)
 
 
 # Agent to determine if query needs RAG context or can use general knowledge.
@@ -122,7 +123,8 @@ def create_app(
         
         if query:
             # Classify query to determine if RAG context is needed
-            query_type = classify_query_agent(query, ollama_model, "http://localhost:11434")
+            ollama_url = os.getenv("OLLAMA_URL", "http://0.0.0.0:11434")
+            query_type = classify_query_agent(query, ollama_model, ollama_url)
             print(f"\n[Query Classification] Type: {query_type}\n")
             
             vectors_file = Path(vectors_path)
@@ -172,8 +174,8 @@ def create_app(
                 context_count = min(max_chunks, len(eligible_idx))
                 context_idx = eligible_idx[:context_count]
                 
+                # Build context without country prefix for LLM injection
                 top_context = "\n\n".join(
-                    f"[Source {extract_country(chunks[int(i)].get('source_pdf'))}] "
                     f"{chunks[int(i)]['text']}"
                     for i in context_idx
                 )
@@ -188,10 +190,11 @@ def create_app(
                 print(prompt)
             
             try:
+                ollama_url = os.getenv("OLLAMA_URL", "http://0.0.0.0:11434")
                 llm_answer = call_ollama(
                     prompt=prompt,
                     model=ollama_model,
-                    base_url="http://localhost:11434",
+                    base_url=ollama_url,
                 )
             except Exception as exc:
                 llm_answer = f"LLM error: {exc}"
