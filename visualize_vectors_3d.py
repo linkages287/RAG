@@ -44,11 +44,14 @@ def main() -> None:
     reduced = pca.fit_transform(vectors)
 
     clusters = min(args.clusters, reduced.shape[0])
-    labels = (
-        KMeans(n_clusters=clusters, n_init=10, random_state=42)
-        .fit(reduced)
-        .labels_
-    )
+    kmeans = KMeans(n_clusters=clusters, n_init=10, random_state=42).fit(reduced)
+    labels = kmeans.labels_
+    centers = kmeans.cluster_centers_[labels]
+    distances = np.linalg.norm(reduced - centers, axis=1)
+    if distances.max() > 0:
+        color_values = distances / distances.max()
+    else:
+        color_values = distances
 
     fig = plt.figure(figsize=(8, 6))
     ax = fig.add_subplot(111, projection="3d")
@@ -56,10 +59,10 @@ def main() -> None:
         reduced[:, 0],
         reduced[:, 1],
         reduced[:, 2],
-        s=6,
-        alpha=0.7,
-        c=labels,
-        cmap="tab10",
+        s=18,
+        alpha=0.8,
+        c=color_values,
+        cmap="viridis",
     )
     ax.set_title("Vector Embeddings (PCA 3D)")
     ax.set_xlabel("PC1")

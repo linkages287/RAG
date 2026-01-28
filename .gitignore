@@ -1,5 +1,13 @@
 *.pdf
 out.json
+*.npz
+cms.json
+cmstree.json
+eben.json
+out_*.json
+RAGprj.zip
+AI_model_arc
+models/
 __pycache__/
 *.pyc
 *.pyo

@@ -75,6 +75,14 @@
       <div class="meta">
         Vectors: {{ vectors_path }}
       </div>
+      {% if query_type %}
+      <div class="meta" style="margin-top: 8px;">
+        <strong>Query Type:</strong> 
+        <span class="badge" style="background: {% if query_type == 'rag' %}#d4edda{% else %}#fff3cd{% endif %};">
+          {% if query_type == 'rag' %}RAG Context Required{% else %}General Knowledge{% endif %}
+        </span>
+      </div>
+      {% endif %}
     </section>
 
     {% if llm_answer %}
@@ -89,9 +97,28 @@
       <h2>Search Results</h2>
       {% for result in search_results %}
       <div class="chunk">
+      <h3>
+        #{{ result.rank }}
+        <span class="badge">score: {{ "%.4f"|format(result.score) }}</span>
+        <span class="badge">country: {{ result.country }}</span>
+        <span class="badge">chunk_id: {{ result.chunk.chunk_id }}</span>
+        <span class="badge">pages: {{ result.chunk.page_start }}-{{ result.chunk.page_end }}</span>
+      </h3>
+        <pre>{{ result.chunk.text }}</pre>
+      </div>
+      {% endfor %}
+    </section>
+    {% endif %}
+
+    {% if all_results %}
+    <section>
+      <h2>All Chunks (Scored)</h2>
+      {% for result in all_results %}
+      <div class="chunk">
         <h3>
-          #{{ result.rank }}
           <span class="badge">score: {{ "%.4f"|format(result.score) }}</span>
+          <span class="badge">country: {{ result.country }}</span>
+          <span class="badge">source: {{ result.source_pdf }}</span>
           <span class="badge">chunk_id: {{ result.chunk.chunk_id }}</span>
           <span class="badge">pages: {{ result.chunk.page_start }}-{{ result.chunk.page_end }}</span>
         </h3>
