@@ -38,7 +38,8 @@ class AgentState(TypedDict):
     task_status: str
     results: List[Dict]
     context: Dict
-    llm: Optional[object]  # Store LLM instance
+    llm: Optional[object]  # Store LLM instance (deprecated, use llm_config)
+    llm_config: Optional[Dict]  # LLM configuration (model, base_url)
     weaviate_config: Optional[Dict]  # Weaviate configuration
     retrieved_docs: List[Dict]  # Retrieved documents from Weaviate
 
