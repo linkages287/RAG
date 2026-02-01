@@ -326,6 +326,8 @@ class WeaviateMultiSourceRAG:
                     
                     all_results.append({
                         "source": source_name,
+                        "collection_name": collection_name,
+                        "uuid": str(obj.uuid),
                         "score": similarity,
                         "chunk": chunk_data,
                         "country": props.get("country", extract_country(props.get("source_pdf"))),

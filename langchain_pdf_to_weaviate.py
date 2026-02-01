@@ -11,7 +11,10 @@ from typing import List
 try:
     from langchain_community.document_loaders import PyPDFLoader
     from langchain_text_splitters import RecursiveCharacterTextSplitter
-    from langchain_community.embeddings import HuggingFaceEmbeddings
+    try:
+        from langchain_huggingface import HuggingFaceEmbeddings
+    except ImportError:
+        from langchain_community.embeddings import HuggingFaceEmbeddings
     try:
         from langchain_core.embeddings import Embeddings
     except ImportError:

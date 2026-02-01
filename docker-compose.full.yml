@@ -1,0 +1,60 @@
+version: '3.8'
+
+services:
+  # PDF Text RAG Application
+  pdftext-rag:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: pdftext-rag
+    volumes:
+      - ./models:/app/models
+      - ./pdf:/app/pdf
+      - ./CMs:/app/CMs
+      - ./templates:/app/templates
+      - ./data:/app/data
+    ports:
+      - "5000:5000"  # app.py
+      - "5001:5001"  # app_chat.py
+      - "5003:5003"  # app_weaviate_rag.py
+      - "5004:5004"  # langchain_rag_chatbot.py
+    environment:
+      - PYTHONUNBUFFERED=1
+      - WEAVIATE_URL=http://weaviate:8080
+      - OLLAMA_URL=http://ollama:11434
+    depends_on:
+      - weaviate
+      - ollama
+    command: tail -f /dev/null  # Keep container running
+    restart: unless-stopped
+
+  # Weaviate Vector Database
+  weaviate:
+    image: cr.weaviate.io/semitechnologies/weaviate:1.35.3
+    container_name: weaviate
+    ports:
+      - "8080:8080"
+      - "50051:50051"
+    volumes:
+      - weaviate_data:/var/lib/weaviate
+    environment:
+      AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: 'true'
+      PERSISTENCE_DATA_PATH: '/var/lib/weaviate'
+      ENABLE_MODULES: 'text2vec-ollama,generative-ollama'
+      CLUSTER_HOSTNAME: 'node1'
+      OLLAMA_API_ENDPOINT: 'http://ollama:11434'
+    restart: unless-stopped
+
+  # Ollama LLM Server
+  ollama:
+    image: ollama/ollama:0.12.9
+    container_name: ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    restart: unless-stopped
+
+volumes:
+  weaviate_data:
+  ollama_data:
