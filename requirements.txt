@@ -38,6 +38,7 @@ kiwisolver==1.4.9
 langchain==1.2.6
 langchain-classic==1.0.1
 langchain-community==0.4.1
+langchain-huggingface>=0.0.1
 langchain-core==1.2.7
 langchain-ollama==1.0.1
 langchain-text-splitters==1.1.0

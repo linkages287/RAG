@@ -10,7 +10,10 @@ from typing import List, Optional
 
 try:
     from langchain_community.vectorstores import Weaviate
-    from langchain_community.embeddings import HuggingFaceEmbeddings
+    try:
+        from langchain_huggingface import HuggingFaceEmbeddings
+    except ImportError:
+        from langchain_community.embeddings import HuggingFaceEmbeddings
     from langchain.chains import ConversationalRetrievalChain
     from langchain.memory import ConversationBufferWindowMemory
     from langchain_community.llms import Ollama
