@@ -503,6 +503,69 @@
       .message-content p:last-child {
         margin-bottom: 0;
       }
+      .weaviate-panel {
+        background: #1a252f;
+        padding: 12px 24px;
+        border-bottom: 1px solid #2d3139;
+        font-size: 13px;
+      }
+      .weaviate-panel h3 {
+        margin: 0 0 8px 0;
+        font-size: 13px;
+        font-weight: 600;
+        color: #bdc3c7;
+      }
+      .weaviate-panel .collections-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px 24px;
+        align-items: center;
+      }
+      .weaviate-panel .collections-list-inner {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px 24px;
+        align-items: center;
+      }
+      .weaviate-panel label {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        cursor: pointer;
+        color: #ecf0f1;
+      }
+      .weaviate-panel input[type="checkbox"] {
+        margin: 0;
+      }
+      .weaviate-panel .apply-btn {
+        padding: 6px 14px;
+        background: #3498db;
+        color: white;
+        border: none;
+        border-radius: 6px;
+        font-size: 12px;
+        cursor: pointer;
+      }
+      .weaviate-panel .apply-btn:hover {
+        background: #2980b9;
+      }
+      .weaviate-panel .refresh-btn {
+        padding: 6px 14px;
+        background: #27ae60;
+        color: white;
+        border: none;
+        border-radius: 6px;
+        font-size: 12px;
+        cursor: pointer;
+      }
+      .weaviate-panel .refresh-btn:hover {
+        background: #219a52;
+      }
+      .weaviate-panel .selected-note {
+        font-size: 11px;
+        opacity: 0.8;
+        margin-top: 6px;
+      }
     </style>
   </head>
   <body>
@@ -510,9 +573,35 @@
       <h1>Multi-Source RAG Chatbot</h1>
       <div class="meta">NATO Analyst - Multi-Source Document Search</div>
       <div class="sources-info">
-        Sources: {% for source in sources %}{{ source }}{% if not loop.last %}, {% endif %}{% endfor %}
+        {% if weaviate_mode and selected_collections %}
+          Weaviate: {% for c in selected_collections %}{{ c.source_name }}{% if not loop.last %}, {% endif %}{% endfor %}
+        {% elif weaviate_mode %}
+          Select Weaviate collections below
+        {% else %}
+          Sources: {% for source in sources %}{{ source }}{% if not loop.last %}, {% endif %}{% endfor %}
+        {% endif %}
       </div>
     </header>
+
+    {% if weaviate_mode %}
+    <div class="weaviate-panel" id="weaviatePanel">
+      <h3>Weaviate collections</h3>
+      <div class="collections-row">
+        <div id="weaviateCollectionsList" class="collections-list-inner">
+          {% set selected_names = selected_collections|map(attribute='source_name')|list if selected_collections else [] %}
+          {% for col in available_collections %}
+          <label>
+            <input type="checkbox" name="weaviate_collection" value="{{ col.name }}" {% if col.name in selected_names %}checked{% endif %} />
+            {{ col.name }} ({{ col.count }})
+          </label>
+          {% endfor %}
+        </div>
+        <button type="button" class="apply-btn" id="weaviateApplyBtn">Apply selection</button>
+        <button type="button" class="refresh-btn" id="weaviateRefreshBtn">Refresh collections</button>
+      </div>
+      <div class="selected-note" id="weaviateSelectedNote"></div>
+    </div>
+    {% endif %}
 
     <div class="chat-container" id="chatContainer">
       {% if messages %}
@@ -580,7 +669,61 @@
       const sendButton = document.getElementById("sendButton");
       const chatForm = document.getElementById("chatForm");
       const newChatButton = document.getElementById("newChatButton");
-      
+      const weaviateApplyBtn = document.getElementById("weaviateApplyBtn");
+      const weaviateRefreshBtn = document.getElementById("weaviateRefreshBtn");
+      const weaviateSelectedNote = document.getElementById("weaviateSelectedNote");
+      const weaviateCollectionsList = document.getElementById("weaviateCollectionsList");
+
+      // Weaviate: refresh collections list from server (keeps current checkbox selection)
+      if (weaviateRefreshBtn && weaviateCollectionsList) {
+        weaviateRefreshBtn.addEventListener("click", async function() {
+          const currentlyChecked = Array.from(document.querySelectorAll('input[name="weaviate_collection"]:checked')).map(cb => cb.value);
+          try {
+            weaviateRefreshBtn.disabled = true;
+            weaviateRefreshBtn.textContent = "Refreshing…";
+            const response = await fetch("/api/weaviate/collections");
+            const data = await response.json();
+            const collections = data.collections || [];
+            let html = "";
+            collections.forEach(function(col) {
+              const checked = currentlyChecked.indexOf(col.name) !== -1 ? " checked" : "";
+              html += "<label><input type=\"checkbox\" name=\"weaviate_collection\" value=\"" + escapeHtml(col.name) + "\"" + checked + " /> " + escapeHtml(col.name) + " (" + escapeHtml(col.count) + ")</label>";
+            });
+            weaviateCollectionsList.innerHTML = html;
+            if (weaviateSelectedNote) weaviateSelectedNote.textContent = "Collections refreshed. New collections are listed; click Apply selection to use them.";
+          } catch (err) {
+            if (weaviateSelectedNote) weaviateSelectedNote.textContent = "Error refreshing: " + err.message;
+          } finally {
+            weaviateRefreshBtn.disabled = false;
+            weaviateRefreshBtn.textContent = "Refresh collections";
+          }
+        });
+      }
+
+      // Weaviate: apply selected collections
+      if (weaviateApplyBtn) {
+        weaviateApplyBtn.addEventListener("click", async function() {
+          const checkboxes = document.querySelectorAll('input[name="weaviate_collection"]:checked');
+          const collections = Array.from(checkboxes).map(cb => cb.value);
+          try {
+            const response = await fetch("/api/weaviate/select", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ collections: collections }),
+            });
+            const data = await response.json();
+            if (response.ok && data.success) {
+              if (weaviateSelectedNote) weaviateSelectedNote.textContent = "Selection saved. Using: " + (collections.length ? collections.join(", ") : "none");
+              window.location.reload();
+            } else {
+              if (weaviateSelectedNote) weaviateSelectedNote.textContent = data.message || "Failed to save selection.";
+            }
+          } catch (err) {
+            if (weaviateSelectedNote) weaviateSelectedNote.textContent = "Error: " + err.message;
+          }
+        });
+      }
+
       // Auto-scroll to bottom
       function scrollToBottom() {
         chatContainer.scrollTop = chatContainer.scrollHeight;

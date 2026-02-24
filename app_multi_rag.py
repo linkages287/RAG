@@ -2,6 +2,7 @@
 """
 Multi-source RAG Chatbot with streaming responses.
 Supports multiple npz/json pairs and combines best results from each source.
+Optional Weaviate mode: select collections from the web interface.
 """
 import argparse
 import json
@@ -16,6 +17,13 @@ from flask import Flask, Response, jsonify, render_template, request, session, s
 from transformers import AutoModel, AutoTokenizer
 
 from ollama_api import call_ollama_api, stream_ollama_api
+
+try:
+    import weaviate
+    WEAVIATE_AVAILABLE = True
+except ImportError:
+    weaviate = None
+    WEAVIATE_AVAILABLE = False
 
 
 def mean_pooling(last_hidden_state: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
@@ -90,6 +98,45 @@ def extract_country(source_pdf: str | None) -> str:
     if match:
         return match.group(1)
     return Path(source_pdf).stem if source_pdf else "unknown"
+
+
+def list_weaviate_collections(weaviate_url: str) -> List[Dict]:
+    """List Weaviate collection names and object counts. Returns [] if Weaviate unavailable or connection fails."""
+    if not WEAVIATE_AVAILABLE or weaviate is None:
+        return []
+    try:
+        if weaviate_url in ("http://localhost:8080", "http://127.0.0.1:8080", ""):
+            client = weaviate.connect_to_local()
+        else:
+            url_clean = weaviate_url.replace("http://", "").replace("https://", "")
+            parts = url_clean.split(":")
+            host = parts[0]
+            port = int(parts[1]) if len(parts) > 1 else 8080
+            client = weaviate.connect_to_custom(
+                http_host=host,
+                http_port=port,
+                http_secure=weaviate_url.startswith("https://"),
+            )
+        try:
+            if not client.is_ready():
+                return []
+            raw = client.collections.list_all()
+            names = list(raw.keys()) if isinstance(raw, dict) else list(raw) if hasattr(raw, "__iter__") else []
+            result = []
+            for name in names:
+                try:
+                    coll = client.collections.get(name)
+                    agg = coll.aggregate.over_all(total_count=True)
+                    count = getattr(agg, "total_count", "?")
+                except Exception:
+                    count = "?"
+                result.append({"name": name, "count": count})
+            return result
+        finally:
+            if hasattr(client, "close"):
+                client.close()
+    except Exception:
+        return []
 
 
 def get_message_size(message: Dict) -> int:
@@ -275,14 +322,24 @@ def create_app(
     model_path: str,
     ollama_model: str,
     chat_log_path: Optional[Path] = None,
+    weaviate_url: Optional[str] = None,
+    max_chunks: int = 12,
+    max_score_diff_pct: float = 10.0,
 ) -> Flask:
-    """Create Flask app with multi-source RAG and streaming."""
+    """Create Flask app with multi-source RAG and streaming. Optional Weaviate mode when weaviate_url is set."""
     app = Flask(__name__)
     app.secret_key = "multi-rag-chatbot-secret-key"
-    
-    # Initialize multi-source RAG
-    rag = MultiSourceRAG(sources_config, model_path)
-    
+    app.config["RAG_MAX_CHUNKS"] = max_chunks
+    app.config["RAG_MAX_SCORE_DIFF_PCT"] = max_score_diff_pct
+
+    # Initialize multi-source RAG from npz/json when sources are provided
+    rag = MultiSourceRAG(sources_config, model_path) if sources_config else None
+
+    if weaviate_url and WEAVIATE_AVAILABLE:
+        from app_weaviate_rag import WeaviateMultiSourceRAG as _WeaviateMultiSourceRAG
+    else:
+        _WeaviateMultiSourceRAG = None
+
     @app.route("/", methods=["GET", "POST"])
     def index():
         query = request.form.get("query", "").strip() if request.method == "POST" else ""
@@ -293,11 +350,18 @@ def create_app(
             session["messages"] = []
         
         messages = session.get("messages", [])
+        sources = [s["name"] for s in rag.sources] if rag else []
+        available_collections = list_weaviate_collections(weaviate_url) if weaviate_url else []
+        selected_collections = session.get("weaviate_collections", [])
         
         return render_template(
             "multi_chat.html",
             messages=messages,
-            sources=[s["name"] for s in rag.sources],
+            sources=sources,
+            weaviate_mode=bool(weaviate_url and WEAVIATE_AVAILABLE),
+            weaviate_url=weaviate_url or "",
+            available_collections=available_collections,
+            selected_collections=selected_collections,
         )
     
     @app.route("/api/chat", methods=["POST"])
@@ -370,63 +434,101 @@ def create_app(
                 )
             print("\n[General Knowledge Mode] Answering without RAG context\n")
         else:
-            # RAG mode - get best results from all sources
-            search_results = rag.search_all_sources(
-                query,
-                top_k_per_source=5,
-                max_total=12,
-                score_threshold=0.6,
-            )
-            
-            best_score = search_results[0]["score"] if search_results else 0.0
-            
-            if best_score < 0.6:
-                query_type = "general"
-                if history_text:
-                    prompt = (
-                        "You are a NATO analyst in a conversation. "
-                        "Answer the following question using your general knowledge and the conversation history below. "
-                        "Provide a detailed and accurate response that is consistent with the ongoing discussion.\n\n"
-                        f"Conversation History:\n{history_text}\n\n"
-                        f"Current Question: {query}\n\n"
-                        "Your response:"
-                    )
-                else:
-                    prompt = (
-                        "You are a NATO analyst. "
-                        "Answer the following question using your general knowledge. "
-                        "Provide a detailed and accurate response.\n\n"
-                        f"Question: {query}\n"
-                    )
-                print(f"\n[Score Check] Best score {best_score:.3f} < 0.6, using general knowledge mode\n")
-            else:
-                # Build context from search results (without country prefix in LLM prompt)
-                top_context = "\n\n".join(
-                    f"{r['chunk']['text']}"
-                    for r in search_results
+            # RAG mode - get best results from all sources (npz/json or Weaviate)
+            no_collections_prompt = None
+            if weaviate_url and _WeaviateMultiSourceRAG and not session.get("weaviate_collections"):
+                no_collections_prompt = (
+                    "You are a NATO analyst. No Weaviate collections are selected. "
+                    "Please select at least one collection in the interface above, then ask your question again. "
+                    "For now, answer briefly using general knowledge.\n\n"
+                    f"Question: {query}\n\nYour response:"
                 )
-                
-                if history_text:
-                    prompt = (
-                        "You are a NATO analyst in a conversation. "
-                        "Answer the user question analyzing only the context below, and consider the conversation history. "
-                        "If the context is insufficient, say so explicitly. "
-                        "Be consistent with the ongoing discussion.\n\n"
-                        f"Conversation History:\n{history_text}\n\n"
-                        f"Current User Question: {query}\n\n"
-                        f"Relevant Context from Documents:\n{top_context}\n\n"
-                        "Your response:"
-                    )
+                search_results = []
+                print("\n[Weaviate] No collections selected; prompting user to select collections\n")
+            elif weaviate_url and _WeaviateMultiSourceRAG and session.get("weaviate_collections"):
+                max_chunks_cfg = app.config.get("RAG_MAX_CHUNKS", 12)
+                weaviate_rag = _WeaviateMultiSourceRAG(
+                    session["weaviate_collections"],
+                    model_path,
+                    weaviate_url,
+                )
+                search_results = weaviate_rag.search_all_sources(
+                    query,
+                    top_k_per_source=10,
+                    max_total=max(50, max_chunks_cfg * 3),
+                    score_threshold=0.3,
+                )
+            elif rag:
+                max_chunks_cfg = app.config.get("RAG_MAX_CHUNKS", 12)
+                search_results = rag.search_all_sources(
+                    query,
+                    top_k_per_source=10,
+                    max_total=max(50, max_chunks_cfg * 3),
+                    score_threshold=0.3,
+                )
+            else:
+                search_results = []
+
+            # Apply max chunks and max score-diff percentage (only keep chunks within X% of best score)
+            if search_results and not no_collections_prompt:
+                max_chunks_cfg = app.config.get("RAG_MAX_CHUNKS", 12)
+                max_score_diff_pct = app.config.get("RAG_MAX_SCORE_DIFF_PCT", 10.0)
+                best_score_val = search_results[0]["score"]
+                min_score = best_score_val * (1.0 - max_score_diff_pct / 100.0)
+                search_results = [r for r in search_results if r["score"] >= min_score][:max_chunks_cfg]
+
+            if no_collections_prompt:
+                prompt = no_collections_prompt
+                query_type = "general"
+            else:
+                best_score = search_results[0]["score"] if search_results else 0.0
+                if best_score < 0.6:
+                    query_type = "general"
+                    if history_text:
+                        prompt = (
+                            "You are a NATO analyst in a conversation. "
+                            "Answer the following question using your general knowledge and the conversation history below. "
+                            "Provide a detailed and accurate response that is consistent with the ongoing discussion.\n\n"
+                            f"Conversation History:\n{history_text}\n\n"
+                            f"Current Question: {query}\n\n"
+                            "Your response:"
+                        )
+                    else:
+                        prompt = (
+                            "You are a NATO analyst. "
+                            "Answer the following question using your general knowledge. "
+                            "Provide a detailed and accurate response.\n\n"
+                            f"Question: {query}\n"
+                        )
+                    print(f"\n[Score Check] Best score {best_score:.3f} < 0.6, using general knowledge mode\n")
                 else:
-                    prompt = (
-                        "You are a NATO analyst. "
-                        "Answer the user question analyzing only the context below. "
-                        "If the context is insufficient, say so explicitly.\n\n"
-                        f"User question: {query}\n\n"
-                        f"Context:\n{top_context}\n"
+                    # Build context from search results (without country prefix in LLM prompt)
+                    top_context = "\n\n".join(
+                        f"{r['chunk']['text']}"
+                        for r in search_results
                     )
-                print("\n--- Injected RAG Prompt ---\n")
-                print(prompt)
+                    
+                    if history_text:
+                        prompt = (
+                            "You are a NATO analyst in a conversation. "
+                            "Answer the user question analyzing only the context below, and consider the conversation history. "
+                            "If the context is insufficient, say so explicitly. "
+                            "Be consistent with the ongoing discussion.\n\n"
+                            f"Conversation History:\n{history_text}\n\n"
+                            f"Current User Question: {query}\n\n"
+                            f"Relevant Context from Documents:\n{top_context}\n\n"
+                            "Your response:"
+                        )
+                    else:
+                        prompt = (
+                            "You are a NATO analyst. "
+                            "Answer the user question analyzing only the context below. "
+                            "If the context is insufficient, say so explicitly.\n\n"
+                            f"User question: {query}\n\n"
+                            f"Context:\n{top_context}\n"
+                        )
+                    print("\n--- Injected RAG Prompt ---\n")
+                    print(prompt)
         
         # Stream LLM response
         def generate():
@@ -507,16 +609,46 @@ def create_app(
     
     @app.route("/api/sources", methods=["GET"])
     def get_sources():
-        """Get information about available sources."""
-        return jsonify({
-            "sources": [
-                {
-                    "name": s["name"],
-                    "chunk_count": len(s["chunks"]),
-                }
-                for s in rag.sources
-            ]
-        })
+        """Get information about available sources (npz/json or selected Weaviate collections)."""
+        if weaviate_url and session.get("weaviate_collections"):
+            return jsonify({
+                "sources": [
+                    {"name": c["source_name"], "chunk_count": "—"}
+                    for c in session["weaviate_collections"]
+                ]
+            })
+        if rag:
+            return jsonify({
+                "sources": [
+                    {"name": s["name"], "chunk_count": len(s["chunks"])}
+                    for s in rag.sources
+                ]
+            })
+        return jsonify({"sources": []})
+
+    @app.route("/api/weaviate/collections", methods=["GET"])
+    def api_weaviate_collections():
+        """List available Weaviate collections (only in Weaviate mode)."""
+        if not weaviate_url or not WEAVIATE_AVAILABLE:
+            return jsonify({"collections": []})
+        collections = list_weaviate_collections(weaviate_url)
+        return jsonify({"collections": collections})
+
+    @app.route("/api/weaviate/select", methods=["POST"])
+    def api_weaviate_select():
+        """Store selected Weaviate collection names in session. Expects JSON: { \"collections\": [\"Name1\", \"Name2\"] }."""
+        if not weaviate_url or not WEAVIATE_AVAILABLE:
+            return jsonify({"success": False, "message": "Weaviate mode not enabled"}), 400
+        data = request.get_json(silent=True) or {}
+        names = data.get("collections")
+        if not isinstance(names, list):
+            return jsonify({"success": False, "message": "Expected JSON body with 'collections' array"}), 400
+        session["weaviate_collections"] = [
+            {"source_name": n, "collection_name": n}
+            for n in names
+            if isinstance(n, str) and n.strip()
+        ]
+        return jsonify({"success": True, "collections": session["weaviate_collections"]})
     
     @app.route("/api/clear", methods=["POST"])
     def clear_chat():
@@ -529,13 +661,18 @@ def create_app(
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Multi-source RAG chatbot with streaming responses."
+        description="Multi-source RAG chatbot with streaming responses. Use --weaviate-url to select Weaviate collections from the web interface."
     )
     parser.add_argument(
         "--sources",
-        required=True,
-        nargs="+",
-        help="Source configurations in format 'name:json_path:npz_path' (can specify multiple).",
+        nargs="*",
+        default=[],
+        help="Source configurations in format 'name:json_path:npz_path' (optional when --weaviate-url is set).",
+    )
+    parser.add_argument(
+        "--weaviate-url",
+        default=None,
+        help="Weaviate server URL (e.g. http://localhost:8080). When set, collections can be selected in the web UI.",
     )
     parser.add_argument(
         "--model-path",
@@ -546,6 +683,18 @@ def main() -> None:
         "--ollama-model",
         default="llama3.2",
         help="Ollama model name (default: llama3.2).",
+    )
+    parser.add_argument(
+        "--max-chunks",
+        type=int,
+        default=12,
+        help="Max number of chunks to pass to the LLM (default: 12).",
+    )
+    parser.add_argument(
+        "--max-score-diff-pct",
+        type=float,
+        default=10.0,
+        help="Max percentage difference from the best score; only chunks within this %% of the best score are used (default: 10.0).",
     )
     parser.add_argument(
         "--chat-log",
@@ -563,8 +712,12 @@ def main() -> None:
         help="Port (default: 5002).",
     )
     args = parser.parse_args()
-    
-    # Parse sources
+
+    weaviate_url = args.weaviate_url or os.environ.get("WEAVIATE_URL")
+    if not args.sources and not weaviate_url:
+        parser.error("Provide either --sources (npz/json) or --weaviate-url to use Weaviate collections from the UI.")
+
+    # Parse sources (used only when not relying on Weaviate UI)
     sources_config = []
     for source_str in args.sources:
         parts = source_str.split(":")
@@ -578,10 +731,18 @@ def main() -> None:
             "json_path": json_path,
             "npz_path": npz_path,
         })
-    
+
     chat_log_path = Path(args.chat_log) if args.chat_log else None
-    
-    app = create_app(sources_config, args.model_path, args.ollama_model, chat_log_path)
+
+    app = create_app(
+        sources_config,
+        args.model_path,
+        args.ollama_model,
+        chat_log_path,
+        weaviate_url=weaviate_url,
+        max_chunks=args.max_chunks,
+        max_score_diff_pct=args.max_score_diff_pct,
+    )
     app.run(host=args.host, port=args.port, debug=True)
 
 

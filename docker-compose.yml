@@ -1,74 +1,35 @@
-version: '3.8'
-
 services:
-  # PDF Text RAG Application
-  pdftext-rag:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: pdftext-rag
-    volumes:
-      # Mount data directories
-      - ./models:/app/models:ro
-      - ./pdf:/app/pdf:ro
-      - ./CMs:/app/CMs:ro
-      - ./templates:/app/templates:ro
-      # Mount data files (JSON, NPZ) - read-write for generated files
-      - .:/app/data:rw
-    ports:
-      - "5000:5000"  # app.py
-      - "5001:5001"  # app_chat.py
-      - "5003:5003"  # app_weaviate_rag.py
-      - "5004:5004"  # langchain_rag_chatbot.py
-    environment:
-      - PYTHONUNBUFFERED=1
-      - PYTHONPATH=/app
-      - WEAVIATE_URL=http://weaviate:8080
-      - OLLAMA_URL=http://ollama:11434
-    depends_on:
-      - weaviate
-      - ollama
-    command: tail -f /dev/null  # Keep container running, override with docker exec
-    restart: unless-stopped
-    networks:
-      - rag-network
-    working_dir: /app
-
-  # Weaviate Vector Database
   weaviate:
-    image: cr.weaviate.io/semitechnologies/weaviate:1.35.3
+    image: semitechnologies/weaviate:latest
     container_name: weaviate
     ports:
       - "8080:8080"
       - "50051:50051"
+    environment:
+      QUERY_DEFAULTS_LIMIT: "25"
+      AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: "true"
+      PERSISTENCE_DATA_PATH: "/var/lib/weaviate"
+      CLUSTER_HOSTNAME: node1
+      RAFT_BOOTSTRAP_EXPECT: "1"
+      RAFT_JOIN: node1
     volumes:
       - weaviate_data:/var/lib/weaviate
-    environment:
-      AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: 'true'
-      PERSISTENCE_DATA_PATH: '/var/lib/weaviate'
-      ENABLE_MODULES: 'text2vec-ollama,generative-ollama'
-      CLUSTER_HOSTNAME: 'node1'
-      OLLAMA_API_ENDPOINT: 'http://ollama:11434'
     restart: unless-stopped
-    networks:
-      - rag-network
 
-  # Ollama LLM Server
-  ollama:
-    image: ollama/ollama:0.12.9
-    container_name: ollama
+  neo4j:
+    image: neo4j:latest
+    container_name: neo4j
     ports:
-      - "11434:11434"
+      - "7474:7474"
+      - "7687:7687"
+    environment:
+      NEO4J_AUTH: neo4j/YourSecurePassword123
     volumes:
-      - ollama_data:/root/.ollama
+      - neo4j_data:/data
+      - neo4j_logs:/logs
     restart: unless-stopped
-    networks:
-      - rag-network
 
 volumes:
   weaviate_data:
-  ollama_data:
-
-networks:
-  rag-network:
-    driver: bridge
+  neo4j_data:
+  neo4j_logs:
